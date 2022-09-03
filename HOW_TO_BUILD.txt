@@ -29,3 +29,7 @@ Where:
   - build tasks is the number of parallel build tasks to run (use cpu count + 1)
   - Debug/Release flag - D=Debug, R=Release, A=All
   - optional Build deps flag - N=Only build the server
+
+And then copy the installer back with:
+
+    ./copyRelease.sh

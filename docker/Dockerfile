@@ -89,3 +89,4 @@ ENTRYPOINT ""C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\A
 #   cygwin
 #   cd /cygdrive/c/vcx
 #   ./buildall.sh 1 9 R
+#   ./copyRelease.sh
