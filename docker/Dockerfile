@@ -58,7 +58,7 @@ RUN choco install -y 7zip \
 #Install Cygwin and remove hardlinks
 #Ignore 7z exit code during compress as exit code is non-zero when junctions are omitted.
 RUN choco install -y cygwin --version 3.1.6 \
-	&& C:\ProgramData\chocolatey\lib\cygwin\tools\setup-x86.exe -q -v -P bison,flex,gawk,gperf,gzip,nasm,sed,python27,python38-lxml -W -R c:\tools\cygwin -a x86_64 \
+	&& C:\ProgramData\chocolatey\lib\cygwin\tools\setup-x86.exe -q -v -P bison,flex,gawk,gperf,gzip,nasm,sed,python27,python38-lxml,make -W -R c:\tools\cygwin -a x86_64 \
 	&& 7z a -mx1 c:\cyg.7z c:\tools \
 	& rd /s /q c:\tools \
 	&& 7z x c:\cyg.7z \
@@ -98,6 +98,4 @@ ENTRYPOINT ""C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Au
 #   git clone src vcx
 #   cygwin
 #   cd /cygdrive/c/vcx
-#   export SHELLOPTS
-#   set -o igncr
 #   ./buildall.sh 1 9 R

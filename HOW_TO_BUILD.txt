@@ -17,8 +17,6 @@ When the container is up, run the following to clone the source into the contain
 		git clone src vcx
 		cygwin
 		cd /cygdrive/c/vcx
-        export SHELLOPTS
-        set -o igncr
 
 Now you can build a 64-bit Debug build on an 8-core system...
 
