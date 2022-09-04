@@ -17,11 +17,12 @@
 FROM mcr.microsoft.com/windows/servercore:ltsc2019
 SHELL ["cmd", "/S", "/C"]
 
+#Install VS Community 2022; based on https://docs.microsoft.com/en-us/visualstudio/install/build-tools-container?view=vs-2022
 RUN \
     # Download the Build Tools bootstrapper.
     curl -SL --output vs_buildtools.exe https://aka.ms/vs/17/release/vs_buildtools.exe \
     \
-    # Install Build Tools with the Microsoft.VisualStudio.Workload.VCTools workload, excluding workloads and components with known issues.
+    # Install Build Tools with the Microsoft.VisualStudio.Workload.VCTools workload.
     && (start /w vs_buildtools.exe --quiet --wait --norestart --nocache \
         --installPath "%ProgramFiles%\Microsoft Visual Studio\2022\Community" \
         --add Microsoft.VisualStudio.Workload.VCTools;includeRecommended \
@@ -49,11 +50,11 @@ RUN choco install -y nsis \
 	&& del c:\programdata\chocolatey\lib\nsis.install\*.nupkg
 
 #Disable creating junctions
-RUN setx CYGWIN "winsymlinks:lnk" /M
+ENV CYGWIN=winsymlinks:lnk
 
 #Install Cygwin
 RUN choco install -y cygwin \
-	&& c:\tools\cygwin\cygwinsetup.exe -q -v -P bison,flex,gawk,gperf,gzip,nasm,sed,python27,python38-lxml,make -W -R c:\tools\cygwin -a x86_64 \
+	&& c:\tools\cygwin\cygwinsetup.exe -q -v -P bison,flex,gawk,gperf,gzip,nasm,sed,python27,python38-lxml -W -R c:\tools\cygwin -a x86_64 \
 	&& rd /s /q C:\Users\ContainerAdministrator\AppData\Local\Temp \
 	&& mkdir C:\Users\ContainerAdministrator\AppData\Local\Temp \
 	&& if exist c:\tools\cygwin\bin\link.exe ren c:\tools\cygwin\bin\link.exe link_cygwin.exe \
@@ -61,7 +62,7 @@ RUN choco install -y cygwin \
 	&& del c:\tools\cygwin\cygwinsetup.exe
 
 #Install Python3
-RUN choco install -y python3 --version 3.9 \
+RUN choco install -y python3 --version 3.9.13 \
 	&& rd /s /q C:\Users\ContainerAdministrator\AppData\Local\Temp \
 	&& mkdir C:\Users\ContainerAdministrator\AppData\Local\Temp \
 	&& pushd c:\python39 \
