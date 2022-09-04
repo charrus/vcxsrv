@@ -23,7 +23,7 @@ RUN \
     \
     # Install Build Tools with the Microsoft.VisualStudio.Workload.VCTools workload, excluding workloads and components with known issues.
     && (start /w vs_buildtools.exe --quiet --wait --norestart --nocache \
-        --installPath "%ProgramFiles%\Microsoft Visual Studio\2022\BuildTools" \
+        --installPath "%ProgramFiles%\Microsoft Visual Studio\2022\Community" \
         --add Microsoft.VisualStudio.Workload.VCTools;includeRecommended \
         || IF "%ERRORLEVEL%"=="3010" EXIT 0) \
     \
@@ -81,7 +81,7 @@ RUN choco install -y git \
 
 # Launch VS2022 developer command prompt when started
 SHELL ["cmd", "/S", "/K"]
-ENTRYPOINT ""C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat""
+ENTRYPOINT ""C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat""
 
 # Launch with docker run -m 4G -v:<VcXSrvGit>:c:\src -it <ContainerName>
 # Once inside:
