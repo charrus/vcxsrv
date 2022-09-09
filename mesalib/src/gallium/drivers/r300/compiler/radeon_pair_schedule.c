@@ -1112,7 +1112,7 @@ static void emit_instruction(
 
 	if (tex_count >= s->max_tex_group || max_score == -1
 		|| (s->TEXCount > 0 && tex_count == s->TEXCount)
-		|| (!s->C->is_r500 && tex_count > 0 && max_score == -1)) {
+		|| (tex_count > 0 && max_score < NO_OUTPUT_SCORE)) {
 		emit_all_tex(s, before);
 	} else {
 

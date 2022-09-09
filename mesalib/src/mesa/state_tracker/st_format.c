@@ -110,23 +110,28 @@ st_mesa_format_to_pipe_format(const struct st_context *st,
    }
 
    if (st_astc_format_fallback(st, mesaFormat)) {
-      const struct util_format_description *desc =
-         util_format_description(mesaFormat);
-
       if (_mesa_is_format_srgb(mesaFormat)) {
-         if (!st->transcode_astc)
-            return PIPE_FORMAT_R8G8B8A8_SRGB;
-         else if (desc->block.width * desc->block.height < 32)
-            return PIPE_FORMAT_DXT5_SRGBA;
-         else
-            return PIPE_FORMAT_DXT1_SRGBA;
+         return st->transcode_astc ? PIPE_FORMAT_DXT5_SRGBA :
+                                     PIPE_FORMAT_R8G8B8A8_SRGB;
       } else {
-         if (!st->transcode_astc)
-            return PIPE_FORMAT_R8G8B8A8_UNORM;
-         else if (desc->block.width * desc->block.height < 32)
-            return PIPE_FORMAT_DXT5_RGBA;
-         else
-            return PIPE_FORMAT_DXT1_RGBA;
+         return st->transcode_astc ? PIPE_FORMAT_DXT5_RGBA :
+                                     PIPE_FORMAT_R8G8B8A8_UNORM;
+      }
+   }
+
+   if (_mesa_is_format_s3tc(mesaFormat) && !st->has_s3tc) {
+      return _mesa_is_format_srgb(mesaFormat) ? PIPE_FORMAT_R8G8B8A8_SRGB :
+                                                PIPE_FORMAT_R8G8B8A8_UNORM;
+   }
+
+   if (_mesa_is_format_bptc(mesaFormat) && !st->has_bptc) {
+      switch (mesaFormat) {
+      case MESA_FORMAT_BPTC_RGB_SIGNED_FLOAT:
+      case MESA_FORMAT_BPTC_RGB_UNSIGNED_FLOAT:
+         return PIPE_FORMAT_R16G16B16X16_FLOAT;
+      default:
+         return _mesa_is_format_srgb(mesaFormat) ? PIPE_FORMAT_R8G8B8A8_SRGB :
+                                                   PIPE_FORMAT_R8G8B8A8_UNORM;
       }
    }
 
@@ -413,18 +418,25 @@ static const struct format_mapping format_map[] = {
       { PIPE_FORMAT_R8G8B8A8_SRGB, DEFAULT_SRGBA_FORMATS }
    },
    {
-      { GL_COMPRESSED_SRGB_EXT, GL_COMPRESSED_SRGB_S3TC_DXT1_EXT, 0 },
+      { GL_COMPRESSED_SRGB_EXT, 0 },
       { PIPE_FORMAT_DXT1_SRGB, PIPE_FORMAT_R8G8B8X8_SRGB,
         PIPE_FORMAT_B8G8R8X8_SRGB, DEFAULT_SRGBA_FORMATS }
+   },
+   {
+      { GL_COMPRESSED_SRGB_S3TC_DXT1_EXT, 0 },
+      { PIPE_FORMAT_DXT1_SRGB }
    },
    {
       { GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT, 0 },
       { PIPE_FORMAT_DXT1_SRGBA, 0 }
    },
    {
-      { GL_COMPRESSED_SRGB_ALPHA_EXT,
-        GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT, 0 },
+      { GL_COMPRESSED_SRGB_ALPHA_EXT },
       { PIPE_FORMAT_DXT3_SRGBA, DEFAULT_SRGBA_FORMATS }
+   },
+   {
+      { GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT, 0 },
+      { PIPE_FORMAT_DXT3_SRGBA, 0 }
    },
    {
       { GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT, 0 },
@@ -1305,6 +1317,22 @@ st_ChooseTextureFormat(struct gl_context *ctx, GLenum target,
             internalFormat == GL_R8UI)
       bindings |= PIPE_BIND_RENDER_TARGET;
 
+   if ((_mesa_is_desktop_gl(ctx) && ctx->Version >= 30) &&
+       (internalFormat == GL_ALPHA4 ||
+        internalFormat == GL_ALPHA8 ||
+        internalFormat == GL_ALPHA12 ||
+        internalFormat == GL_ALPHA16 ||
+        /* ARB_texture_float */
+        internalFormat == GL_ALPHA32F_ARB ||
+        internalFormat == GL_INTENSITY32F_ARB ||
+        internalFormat == GL_LUMINANCE32F_ARB ||
+        internalFormat == GL_LUMINANCE_ALPHA32F_ARB ||
+        internalFormat == GL_ALPHA16F_ARB ||
+        internalFormat == GL_INTENSITY16F_ARB ||
+        internalFormat == GL_LUMINANCE16F_ARB ||
+        internalFormat == GL_LUMINANCE_ALPHA16F_ARB))
+      bindings |= PIPE_BIND_RENDER_TARGET;
+
    /* GLES allows the driver to choose any format which matches
     * the format+type combo, because GLES only supports unsized internal
     * formats and expects the driver to choose whatever suits it.
@@ -1494,6 +1522,9 @@ st_QueryInternalFormat(struct gl_context *ctx, GLenum target,
    case GL_VIRTUAL_PAGE_SIZE_X_ARB:
    case GL_VIRTUAL_PAGE_SIZE_Y_ARB:
    case GL_VIRTUAL_PAGE_SIZE_Z_ARB: {
+      /* this is used only for passing CTS */
+      if (target == GL_RENDERBUFFER)
+         target = GL_TEXTURE_2D;
       mesa_format format = st_ChooseTextureFormat(ctx, target, internalFormat, GL_NONE, GL_NONE);
       enum pipe_format pformat = st_mesa_format_to_pipe_format(st, format);
 
@@ -1565,6 +1596,8 @@ st_translate_color(union pipe_color_union *color,
       case GL_LUMINANCE_ALPHA:
          ci[1] = ci[2] = ci[0];
          break;
+      /* Stencil border is tricky on some hw. Help drivers a little here. */
+      case GL_STENCIL_INDEX:
       case GL_INTENSITY:
          ci[1] = ci[2] = ci[3] = ci[0];
          break;
@@ -1596,8 +1629,6 @@ st_translate_color(union pipe_color_union *color,
       case GL_LUMINANCE_ALPHA:
          cf[1] = cf[2] = cf[0];
          break;
-      /* Stencil border is tricky on some hw. Help drivers a little here. */
-      case GL_STENCIL_INDEX:
       case GL_INTENSITY:
          cf[1] = cf[2] = cf[3] = cf[0];
          break;

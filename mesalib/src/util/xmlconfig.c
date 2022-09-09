@@ -56,6 +56,7 @@ static inline void regfree(regex_t* r) {}
 #endif
 #include <fcntl.h>
 #include <math.h>
+#include "strndup.h"
 #include "u_process.h"
 #include "os_file.h"
 
@@ -208,29 +209,6 @@ strToF(const char *string, const char **tail)
    return result;
 }
 
-#if !defined(HAVE_STRNDUP)
-
-/* Emulates glibc's strndup() */
-char *
-strndup(const char *str, size_t size)
-{
-  size_t len;
-  char *result = (char *)NULL;
-
-  if ((char *)NULL == str) return (char *)NULL;
-
-  len = strlen(str);
-  if (!len) return strdup("");
-  if (size > len) size = len;
-
-  result = (char *)malloc((size + 1) * sizeof (char));
-  memcpy(result, str, size);
-  result[size] = 0x0;
-  return result;
-}
-
-#endif /* _WIN32 should be !HAVE_STRNDUP */
-
 /** \brief Parse a value of a given type. */
 static unsigned char
 parseValue(driOptionValue *v, driOptionType type, const char *string)
@@ -369,7 +347,10 @@ driParseOptionInfo(driOptionCache *info,
       driOptionInfo *optinfo = &info->info[i];
       driOptionValue *optval = &info->values[i];
 
-      assert(!optinfo->name); /* No duplicate options in your list. */
+      if (optinfo->name) {
+         /* Duplicate options override the value, but the type must match. */
+         assert(optinfo->type == opt->info.type);
+      }
 
       optinfo->type = opt->info.type;
       optinfo->range = opt->info.range;
@@ -1021,44 +1002,9 @@ parseOneConfigFile(struct OptConfData *data, const char *filename)
    XML_ParserFree(p);
 }
 
-#ifdef _WIN32
-bool fnmatch(char const *needle, char const *haystack)
-{
-    for (; *needle != '\0'; ++needle)
-    {
-        switch (*needle)
-        {
-            case '?':
-                if (*haystack == '\0')
-                    return false;
-                ++haystack;
-                break;
-            case '*':
-                {
-                    if (needle[1] == '\0')
-                        return true;
-                    size_t max = strlen(haystack);
-                    for (size_t i = 0; i < max; i++)
-                        if (fnmatch(needle + 1, haystack + i))
-                            return true;
-                    return false;
-                }
-            default:
-                if (*haystack != *needle)
-                    return false;
-                ++haystack;
-        }
-    }
-    return *haystack == '\0';
-}
-#endif
-
 static int
 scandir_filter(const struct dirent *ent)
 {
-#ifdef _WIN32
-    if (fnmatch("*.conf", ent->d_name))
-#else
 #ifndef DT_REG /* systems without d_type in dirent results */
    struct stat st;
 
@@ -1075,7 +1021,6 @@ scandir_filter(const struct dirent *ent)
 
    int len = strlen(ent->d_name);
    if (len <= 5 || strcmp(ent->d_name + len - 5, ".conf"))
-#endif
       return 0;
 
    return 1;
@@ -1250,7 +1195,7 @@ driParseConfigFiles(driOptionCache *cache, const driOptionCache *info,
                     const char *engineName, uint32_t engineVersion)
 {
    initOptionCache(cache, info);
-   struct OptConfData userData;
+   struct OptConfData userData = {0};
 
    userData.cache = cache;
    userData.screenNum = screenNum;

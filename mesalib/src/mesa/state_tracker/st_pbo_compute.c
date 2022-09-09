@@ -37,6 +37,7 @@
 #include "compiler/glsl/gl_nir.h"
 #include "compiler/glsl/gl_nir_linker.h"
 #include "util/u_sampler.h"
+#include "util/streaming-load-memcpy.h"
 
 #define BGR_FORMAT(NAME) \
     {{ \
@@ -208,13 +209,20 @@ struct pbo_data {
  * so bitwise operations must be used to "unpact" everything
  */
 static void
-init_pbo_shader_data(nir_builder *b, struct pbo_shader_data *sd)
+init_pbo_shader_data(nir_builder *b, struct pbo_shader_data *sd, unsigned coord_components)
 {
    nir_variable *ubo = nir_variable_create(b->shader, nir_var_uniform, glsl_uvec4_type(), "offset");
    nir_ssa_def *ubo_load = nir_load_var(b, ubo);
 
-   sd->offset = nir_umin(b, nir_u2u32(b, nir_extract_bits(b, &ubo_load, 1, STRUCT_OFFSET(x), 2, 16)), nir_imm_int(b, 65535));
-   sd->range = nir_umin(b, nir_u2u32(b, nir_extract_bits(b, &ubo_load, 1, STRUCT_OFFSET(width), 3, 16)), nir_imm_int(b, 65535));
+   sd->offset = nir_u2u32(b, nir_extract_bits(b, &ubo_load, 1, STRUCT_OFFSET(x), 2, 16));
+   if (coord_components == 1)
+      sd->offset = nir_vector_insert_imm(b, sd->offset, nir_imm_int(b, 0), 1);
+   sd->range = nir_u2u32(b, nir_extract_bits(b, &ubo_load, 1, STRUCT_OFFSET(width), 3, 16));
+   if (coord_components < 3) {
+      sd->range = nir_vector_insert_imm(b, sd->range, nir_imm_int(b, 1), 2);
+      if (coord_components == 1)
+         sd->range = nir_vector_insert_imm(b, sd->range, nir_imm_int(b, 1), 1);
+   }
 
    STRUCT_BLOCK(80,
       STRUCT_MEMBER_BOOL(80, invert, 0);
@@ -609,7 +617,7 @@ create_conversion_shader(struct st_context *st, enum pipe_texture_target target,
    sampler->data.explicit_binding = 1;
 
    struct pbo_shader_data sd;
-   init_pbo_shader_data(&b, &sd);
+   init_pbo_shader_data(&b, &sd, coord_components);
 
    nir_ssa_def *bsize = nir_imm_ivec4(&b,
                                       b.shader->info.workgroup_size[0],
@@ -620,11 +628,25 @@ create_conversion_shader(struct st_context *st, enum pipe_texture_target target,
    nir_ssa_def *iid = nir_load_local_invocation_id(&b);
    nir_ssa_def *tile = nir_imul(&b, wid, bsize);
    nir_ssa_def *global_id = nir_iadd(&b, tile, iid);
-   nir_ssa_def *start = nir_iadd(&b, global_id, sd.offset);
+   nir_ssa_def *start = nir_iadd(&b, nir_trim_vector(&b, global_id, 2), sd.offset);
 
-   nir_ssa_def *coord = nir_channels(&b, start, (1<<coord_components)-1);
-   nir_ssa_def *max = nir_iadd(&b, sd.offset, sd.range);
-   nir_push_if(&b, nir_ball(&b, nir_ilt(&b, coord, nir_channels(&b, max, (1<<coord_components)-1))));
+   nir_ssa_def *coord;
+   if (coord_components < 3)
+      coord = start;
+   else {
+      /* pad offset vec with global_id to get correct z offset */
+      assert(coord_components == 3);
+      coord = nir_vec3(&b, nir_channel(&b, start, 0),
+                           nir_channel(&b, start, 1),
+                           nir_channel(&b, global_id, 2));
+   }
+   coord = nir_trim_vector(&b, coord, coord_components);
+   nir_ssa_def *offset = coord_components > 2 ?
+                         nir_pad_vector_imm_int(&b, sd.offset, 0, 3) :
+                         nir_trim_vector(&b, sd.offset, coord_components);
+   nir_ssa_def *range = nir_trim_vector(&b, sd.range, coord_components);
+   nir_ssa_def *max = nir_iadd(&b, offset, range);
+   nir_push_if(&b, nir_ball(&b, nir_ilt(&b, coord, max)));
    nir_tex_instr *txf = nir_tex_instr_create(b.shader, 3);
    txf->is_array = glsl_sampler_type_is_array(sampler->type);
    txf->op = nir_texop_txf;
@@ -744,6 +766,16 @@ enum swizzle_clamp {
    SWIZZLE_CLAMP_BGRA = 32,
 };
 
+static bool
+can_copy_direct(const struct gl_pixelstore_attrib *pack)
+{
+   return !(pack->RowLength ||
+            pack->SkipPixels ||
+            pack->SkipRows ||
+            pack->ImageHeight ||
+            pack->SkipImages);
+}
+
 static struct pipe_resource *
 download_texture_compute(struct st_context *st,
                          const struct gl_pixelstore_attrib *pack,
@@ -770,11 +802,13 @@ download_texture_compute(struct st_context *st,
    /* Upload constants */
    {
       struct pipe_constant_buffer cb;
-      assert(view_target != PIPE_TEXTURE_1D_ARRAY || !yoffset);
+      assert(view_target != PIPE_TEXTURE_1D_ARRAY || !zoffset);
       struct pbo_data pd = {
-         .x = xoffset,
-         .y = yoffset,
-         .width = width, .height = height, .depth = depth,
+         .x = MIN2(xoffset, 65535),
+         .y = view_target == PIPE_TEXTURE_1D_ARRAY ? 0 : MIN2(yoffset, 65535),
+         .width = MIN2(width, 65535),
+         .height = MIN2(height, 65535),
+         .depth = MIN2(depth, 65535),
          .invert = pack->Invert,
          .blocksize = util_format_get_blocksize(dst_format) - 1,
          .alignment = ffs(MAX2(pack->Alignment, 1)) - 1,
@@ -919,15 +953,24 @@ download_texture_compute(struct st_context *st,
    }
 
    /* Set up destination buffer */
-   unsigned img_stride = _mesa_image_image_stride(pack, width, height, format, type);
+   unsigned img_stride = src->target == PIPE_TEXTURE_3D ||
+                         src->target == PIPE_TEXTURE_2D_ARRAY ||
+                         src->target == PIPE_TEXTURE_CUBE_ARRAY ?
+                         /* only use image stride for 3d images to avoid pulling in IMAGE_HEIGHT pixelstore */
+                         _mesa_image_image_stride(pack, width, height, format, type) :
+                         _mesa_image_row_stride(pack, width, format, type) * height;
    unsigned buffer_size = (depth + (dim == 3 ? pack->SkipImages : 0)) * img_stride;
    {
-      dst = pipe_buffer_create(screen, PIPE_BIND_SHADER_BUFFER, PIPE_USAGE_STAGING, buffer_size);
-      if (!dst)
-         goto fail;
-
       struct pipe_shader_buffer buffer;
       memset(&buffer, 0, sizeof(buffer));
+      if (can_copy_direct(pack) && pack->BufferObj) {
+         dst = pack->BufferObj->buffer;
+         assert(pack->BufferObj->Size >= buffer_size);
+      } else {
+         dst = pipe_buffer_create(screen, PIPE_BIND_SHADER_BUFFER, PIPE_USAGE_STAGING, buffer_size);
+         if (!dst)
+            goto fail;
+      }
       buffer.buffer = dst;
       buffer.buffer_size = buffer_size;
 
@@ -983,20 +1026,23 @@ copy_converted_buffer(struct gl_context * ctx,
 
    pixels = _mesa_map_pbo_dest(ctx, pack, pixels);
    /* compute shader doesn't handle these to cut down on uniform size */
-   if (pack->RowLength ||
-       pack->SkipPixels ||
-       pack->SkipRows ||
-       pack->ImageHeight ||
-       pack->SkipImages) {
-
+   if (!can_copy_direct(pack)) {
       if (view_target == PIPE_TEXTURE_1D_ARRAY) {
          depth = height;
          height = 1;
          zoffset = yoffset;
          yoffset = 0;
       }
+
       struct gl_pixelstore_attrib packing = *pack;
-      memset(&packing.RowLength, 0, offsetof(struct gl_pixelstore_attrib, SwapBytes) - offsetof(struct gl_pixelstore_attrib, RowLength));
+
+      /* source image is tightly packed */
+      packing.RowLength = 0;
+      packing.SkipPixels = 0;
+      packing.SkipRows = 0;
+      packing.ImageHeight = 0;
+      packing.SkipImages = 0;
+
       for (unsigned z = 0; z < depth; z++) {
          for (unsigned y = 0; y < height; y++) {
             GLubyte *dst = _mesa_image_address(dim, pack, pixels,
@@ -1005,12 +1051,12 @@ copy_converted_buffer(struct gl_context * ctx,
             GLubyte *srcpx = _mesa_image_address(dim, &packing, map,
                                                  width, height, format, type,
                                                  z, y, 0);
-            memcpy(dst, srcpx, util_format_get_stride(dst_format, width));
+            util_streaming_load_memcpy(dst, srcpx, util_format_get_stride(dst_format, width));
          }
       }
    } else {
       /* direct copy for all other cases */
-      memcpy(pixels, map, dst->width0);
+      util_streaming_load_memcpy(pixels, map, dst->width0);
    }
 
    _mesa_unmap_pbo_dest(ctx, pack);
@@ -1027,10 +1073,10 @@ st_GetTexSubImage_shader(struct gl_context * ctx,
    struct st_context *st = st_context(ctx);
    struct pipe_screen *screen = st->screen;
    struct gl_texture_object *stObj = texImage->TexObject;
-   struct pipe_resource *src = stObj->pt;
+   struct pipe_resource *src = texImage->pt;
    struct pipe_resource *dst = NULL;
    enum pipe_format dst_format, src_format;
-   unsigned level = texImage->Level + texImage->TexObject->Attrib.MinLevel;
+   unsigned level = (texImage->pt != stObj->pt ? 0 : texImage->Level) + texImage->TexObject->Attrib.MinLevel;
    unsigned layer = texImage->Face + texImage->TexObject->Attrib.MinLayer;
    enum pipe_texture_target view_target;
 
@@ -1100,11 +1146,15 @@ st_GetTexSubImage_shader(struct gl_context * ctx,
    dst = download_texture_compute(st, &ctx->Pack, xoffset, yoffset, zoffset, width, height, depth,
                                   level, layer, format, type, src_format, view_target, src, dst_format,
                                   swizzle_clamp);
+   if (!dst)
+      return false;
 
-   copy_converted_buffer(ctx, &ctx->Pack, view_target, dst, dst_format, xoffset, yoffset, zoffset,
-                       width, height, depth, format, type, pixels);
+   if (!can_copy_direct(&ctx->Pack) || !ctx->Pack.BufferObj) {
+      copy_converted_buffer(ctx, &ctx->Pack, view_target, dst, dst_format, xoffset, yoffset, zoffset,
+                          width, height, depth, format, type, pixels);
 
-   pipe_resource_reference(&dst, NULL);
+      pipe_resource_reference(&dst, NULL);
+   }
 
    return true;
 }

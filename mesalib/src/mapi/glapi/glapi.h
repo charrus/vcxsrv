@@ -70,26 +70,12 @@ extern "C" {
 #  endif
 #endif /* _GLAPI_NO_EXPORTS */
 
-#include "GL/gl.h"
-#include "GL/glext.h"
 
-
-struct _glapi_table;
-
-typedef void (*_glapi_proc)(void); /* generic function pointer */
+typedef void (*_glapi_proc)(void);
 
 typedef void (*_glapi_nop_handler_proc)(const char *name);
 
-typedef void (*_glapi_warning_func)(void *ctx, const char *str, ...);
-
-
-/*
- * Number of extension functions which we can dynamically add at runtime.
- */
-#define MAX_EXTENSION_FUNCS 300
-
-
-#if defined (USE_ELF_TLS)
+struct _glapi_table;
 
 #if DETECT_OS_WINDOWS
 extern __THREAD_INITIAL_EXEC struct _glapi_table * _glapi_tls_Dispatch;
@@ -102,7 +88,7 @@ _GLAPI_EXPORT extern __THREAD_INITIAL_EXEC void * _glapi_tls_Context;
 _GLAPI_EXPORT extern const struct _glapi_table *_glapi_Dispatch;
 _GLAPI_EXPORT extern const void *_glapi_Context;
 
-#if defined (USE_TLS_BEHIND_FUNCTIONS)
+#if DETECT_OS_WINDOWS && !defined(MAPI_MODE_UTIL) && !defined(MAPI_MODE_GLAPI)
 # define GET_DISPATCH() _glapi_get_dispatch()
 # define GET_CURRENT_CONTEXT(C)  struct gl_context *C = (struct gl_context *) _glapi_get_context()
 #else
@@ -110,86 +96,81 @@ _GLAPI_EXPORT extern const void *_glapi_Context;
 # define GET_CURRENT_CONTEXT(C)  struct gl_context *C = (struct gl_context *) _glapi_tls_Context
 #endif
 
-#else
-
-#ifdef INSERVER
-#define SERVEXTERN _declspec(dllimport)
-#else
-#define SERVEXTERN _declspec(dllexport)
-#endif
-
-SERVEXTERN struct _glapi_table *_glapi_Dispatch;
-SERVEXTERN void *_glapi_Context;
-
-#define GET_DISPATCH() \
-     (likely(_glapi_Dispatch) ? _glapi_Dispatch : _glapi_get_dispatch())
-
-#define GET_CURRENT_CONTEXT(C)  struct gl_context *C = (struct gl_context *) \
-     (likely(_glapi_Context) ? _glapi_Context : _glapi_get_context())
-
-#endif /* defined (USE_ELF_TLS) */
+_GLAPI_EXPORT void
+_glapi_destroy_multithread(void);
 
 
-/**
- ** GL API public functions
- **/
-
-SERVEXTERN void
+_GLAPI_EXPORT void
 _glapi_check_multithread(void);
 
 
-SERVEXTERN void
+_GLAPI_EXPORT void
 _glapi_set_context(void *context);
 
 
-SERVEXTERN void *
+_GLAPI_EXPORT void *
 _glapi_get_context(void);
 
 
-SERVEXTERN void
+_GLAPI_EXPORT void
 _glapi_set_dispatch(struct _glapi_table *dispatch);
 
 
-SERVEXTERN struct _glapi_table *
+_GLAPI_EXPORT struct _glapi_table *
 _glapi_get_dispatch(void);
 
-SERVEXTERN int
-_glapi_begin_dispatch_override(struct _glapi_table *override);
 
-SERVEXTERN void
-_glapi_end_dispatch_override(int layer);
-
-struct _glapi_table *
-_glapi_get_override_dispatch(int layer);
-
-SERVEXTERN GLuint
+_GLAPI_EXPORT unsigned int
 _glapi_get_dispatch_table_size(void);
 
 
-SERVEXTERN int
+_GLAPI_EXPORT int
 _glapi_add_dispatch( const char * const * function_names,
 		     const char * parameter_signature );
+
+_GLAPI_EXPORT int
+_glapi_get_proc_offset(const char *funcName);
+
 
 _GLAPI_EXPORT _glapi_proc
 _glapi_get_proc_address(const char *funcName);
 
+
 _GLAPI_EXPORT const char *
 _glapi_get_proc_name(unsigned int offset);
 
-extern struct _glapi_table *
+
+#if defined(GLX_USE_APPLEGL) || defined(GLX_USE_WINDOWSGL)
+_GLAPI_EXPORT struct _glapi_table *
 _glapi_create_table_from_handle(void *handle, const char *symbol_prefix);
 
 _GLAPI_EXPORT void
 _glapi_table_patch(struct _glapi_table *, const char *name, void *wrapper);
+#endif
 
 
-void
+_GLAPI_EXPORT void
 _glapi_set_nop_handler(_glapi_nop_handler_proc func);
 
 /** Return pointer to new dispatch table filled with no-op functions */
-struct _glapi_table *
+_GLAPI_EXPORT struct _glapi_table *
 _glapi_new_nop_table(unsigned num_entries);
 
+
+/** Deprecated function */
+_GLAPI_EXPORT unsigned long
+_glthread_GetID(void);
+
+
+/*
+ * These stubs are kept so that the old DRI drivers still load.
+ */
+_GLAPI_EXPORT void
+_glapi_noop_enable_warnings(unsigned char enable);
+
+
+_GLAPI_EXPORT void
+_glapi_set_warning_func(_glapi_proc func);
 
 
 #ifdef __cplusplus
