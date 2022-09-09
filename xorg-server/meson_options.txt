@@ -2,12 +2,8 @@ option('xorg', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
        description: 'Enable Xorg X Server')
 option('xephyr', type: 'boolean', value: false,
        description: 'Enable Xephyr nested X server')
-option('xwayland', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
-       description: 'Enable Xwayland X server')
 option('glamor', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
-       description: 'Enable glamor (default yes for Xorg/Xwayland builds)')
-option('xwayland_eglstream', type: 'combo', choices: ['true', 'false', 'auto'],
-       value: 'auto', description: 'Enable EGLStream support for glamor on Xwayland')
+       description: 'Enable glamor (default yes for Xorg builds)')
 option('xnest', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
        description: 'Enable Xnest nested X server')
 option('xvfb', type: 'boolean', value: true,
@@ -121,15 +117,19 @@ option('apple-application-name', type: 'string', value: 'X11',
         description: 'Application name')
 option('bundle-id-prefix', type: 'string', value: 'org.x',
         description: 'RDNS prefix for bundle identifier')
+option('bundle-version', type: 'string', value: 'auto',
+        description: 'The CFBundleVersion for the application bundle')
+option('bundle-version-string', type: 'string', value: 'auto',
+        description: 'The CFBundleShortVersionString for the application bundle')
 option('sparkle-feed-url', type: 'string',
         description: 'Feed URL for autoupdating with the Sparkle Framework (default: disabled)')
+option('sparkle-public-edkey', type: 'string',
+        description: 'Public EdDSA key for verifying updates from the Sparkle feed (default: disabled)')
 option('xpbproxy', type: 'boolean', value: false,
         description: 'Build a standalone X pasteboard proxy')
 
 option('libunwind', type: 'boolean', value: false,
         description: 'Use libunwind for backtrace reporting')
-
-option('xwayland-path', type: 'string', description: 'Directory containing Xwayland executable')
 
 option('docs', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
         description: 'Build documentation')

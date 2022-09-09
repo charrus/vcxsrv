@@ -239,18 +239,8 @@ ProcRRCreateLease(ClientPtr client)
     if (!scr_priv)
         return BadMatch;
 
-    if (!scr_priv->rrCreateLease && !scr_priv->rrRequestLease)
+    if (!scr_priv->rrCreateLease)
         return BadMatch;
-
-    if (scr_priv->rrGetLease) {
-        scr_priv->rrGetLease(client, screen, &lease, &fd);
-        if (lease) {
-            if (fd >= 0)
-                goto leaseReturned;
-            else
-                goto bail_lease;
-        }
-    }
 
     /* Allocate a structure to hold all of the lease information */
 
@@ -301,19 +291,10 @@ ProcRRCreateLease(ClientPtr client)
         lease->outputs[o] = output;
     }
 
-    if (scr_priv->rrRequestLease) {
-        rc = scr_priv->rrRequestLease(client, screen, lease);
-        if (rc == Success)
-            return Success;
-        else
-            goto bail_lease;
-    } else {
-        rc = scr_priv->rrCreateLease(screen, lease, &fd);
-        if (rc != Success)
-            goto bail_lease;
-    }
+    rc = scr_priv->rrCreateLease(screen, lease, &fd);
+    if (rc != Success)
+        goto bail_lease;
 
-leaseReturned:
     xorg_list_add(&lease->list, &scr_priv->leases);
 
     if (!AddResource(stuff->lid, RRLeaseType, lease)) {
