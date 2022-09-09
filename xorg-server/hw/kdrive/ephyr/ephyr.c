@@ -39,7 +39,7 @@
 #ifdef GLAMOR
 #include "glamor.h"
 #endif
-#include "ephyr_glamor.h"
+#include "ephyr_glamor_glx.h"
 #include "glx_extinit.h"
 #include "xkbsrv.h"
 
@@ -1182,6 +1182,9 @@ ephyrXcbProcessEvents(Bool queued_only)
         }
 
         if (xev) {
+            if (ephyr_glamor)
+                ephyr_glamor_process_event(xev);
+
             free(xev);
         }
     }

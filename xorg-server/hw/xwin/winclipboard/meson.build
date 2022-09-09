@@ -28,7 +28,6 @@ srcs_xwinclip = [
 executable(
     'xwinclip',
     srcs_xwinclip,
-    dependencies: dependency('xcb'),
     link_with: xwin_clipboard,
     link_args: ['-lgdi32', '-lpthread'],
     install: true,

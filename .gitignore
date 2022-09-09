@@ -27,3 +27,4 @@ cscope*
 *~
 .makefile.dep
 .vscode
+*.am
