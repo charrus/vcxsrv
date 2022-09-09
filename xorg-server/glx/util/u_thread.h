@@ -1,8 +1,8 @@
-/*
- * Mesa 3-D graphics library
- * Version:  6.5.2
+/**************************************************************************
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright 1999-2006 Brian Paul
+ * Copyright 2008 VMware, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -17,202 +17,328 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- */
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ *
+ **************************************************************************/
 
-/*
- * Thread support for gl dispatch.
- *
- * Initial version by John Stone (j.stone@acm.org) (johns@cs.umr.edu)
- *                and Christoph Poliwoda (poliwoda@volumegraphics.com)
- * Revised by Keith Whitwell
- * Adapted for new gl dispatcher by Brian Paul
- *
- *
- *
- * DOCUMENTATION
- *
- * This thread module exports the following types:
- *   _glthread_TSD     Thread-specific data area
- *   _glthread_Thread  Thread datatype
- *   _glthread_Mutex   Mutual exclusion lock
- *
- * Macros:
- *   _glthread_DECLARE_STATIC_MUTEX(name)   Declare a non-local mutex
- *   _glthread_INIT_MUTEX(name)             Initialize a mutex
- *   _glthread_LOCK_MUTEX(name)             Lock a mutex
- *   _glthread_UNLOCK_MUTEX(name)           Unlock a mutex
- *
- * Functions:
- *   _glthread_GetID(v)      Get integer thread ID
- *   _glthread_InitTSD()     Initialize thread-specific data
- *   _glthread_GetTSD()      Get thread-specific data
- *   _glthread_SetTSD()      Set thread-specific data
- *
- */
+#ifndef U_THREAD_H_
+#define U_THREAD_H_
 
-/*
- * If this file is accidentally included by a non-threaded build,
- * it should not cause the build to fail, or otherwise cause problems.
- * In general, it should only be included when needed however.
- */
+#include <errno.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
 
-#ifndef GLTHREAD_H
-#define GLTHREAD_H
+#include "c11/threads.h"
+#include "detect_os.h"
+#include "macros.h"
 
-#if defined(USE_MGL_NAMESPACE)
-#define _glapi_Dispatch _mglapi_Dispatch
+#ifdef HAVE_PTHREAD
+#include <signal.h>
+#ifdef HAVE_PTHREAD_NP_H
+#include <pthread_np.h>
+#endif
 #endif
 
-#if (defined(PTHREADS) || defined(WIN32_THREADS)) \
-    && !defined(THREADS)
-#define THREADS
+#ifdef __HAIKU__
+#include <OS.h>
 #endif
 
-#ifdef VMS
-#include <GL/vms_x_fix.h>
+#if DETECT_OS_LINUX && !defined(ANDROID)
+#include <sched.h>
+#elif defined(_WIN32) && !defined(__CYGWIN__) && _WIN32_WINNT >= 0x0600
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
 #endif
-
-/*
- * POSIX threads. This should be your choice in the Unix world
- * whenever possible.  When building with POSIX threads, be sure
- * to enable any compiler flags which will cause the MT-safe
- * libc (if one exists) to be used when linking, as well as any
- * header macros for MT-safe errno, etc.  For Solaris, this is the -mt
- * compiler flag.  On Solaris with gcc, use -D_REENTRANT to enable
- * proper compiling for MT-safe libc etc.
- */
-#if defined(PTHREADS)
-#include <pthread.h>            /* POSIX threads headers */
-
-typedef struct {
-    pthread_key_t key;
-    int initMagic;
-} _glthread_TSD;
-
-typedef pthread_t _glthread_Thread;
-
-typedef pthread_mutex_t _glthread_Mutex;
-
-#define _glthread_DECLARE_STATIC_MUTEX(name) \
-   static _glthread_Mutex name = PTHREAD_MUTEX_INITIALIZER
-
-#define _glthread_INIT_MUTEX(name) \
-   pthread_mutex_init(&(name), NULL)
-
-#define _glthread_DESTROY_MUTEX(name) \
-   pthread_mutex_destroy(&(name))
-
-#define _glthread_LOCK_MUTEX(name) \
-   (void) pthread_mutex_lock(&(name))
-
-#define _glthread_UNLOCK_MUTEX(name) \
-   (void) pthread_mutex_unlock(&(name))
-
-#endif                          /* PTHREADS */
-
-/*
- * Solaris threads. Use only up to Solaris 2.4.
- * Solaris 2.5 and higher provide POSIX threads.
- * Be sure to compile with -mt on the Solaris compilers, or
- * use -D_REENTRANT if using gcc.
- */
-
-/*
- * Windows threads. Should work with Windows NT and 95.
- * IMPORTANT: Link with multithreaded runtime library when THREADS are
- * used!
- */
-#ifdef WIN32_THREADS
 #include <windows.h>
+#endif
 
-typedef struct {
-    DWORD key;
-    int initMagic;
-} _glthread_TSD;
+#ifdef __FreeBSD__
+/* pthread_np.h -> sys/param.h -> machine/param.h
+ * - defines ALIGN which clashes with our ALIGN
+ */
+#undef ALIGN
+#define cpu_set_t cpuset_t
+#endif
 
-typedef HANDLE _glthread_Thread;
+/* For util_set_thread_affinity to size the mask. */
+#define UTIL_MAX_CPUS               1024  /* this should be enough */
+#define UTIL_MAX_L3_CACHES          UTIL_MAX_CPUS
 
-typedef CRITICAL_SECTION _glthread_Mutex;
+/* Some highly performance-sensitive thread-local variables like the current GL
+ * context are declared with the initial-exec model on Linux.  glibc allocates a
+ * fixed number of extra slots for initial-exec TLS variables at startup, and
+ * Mesa relies on (even if it's dlopen()ed after init) being able to fit into
+ * those.  This model saves the call to look up the address of the TLS variable.
+ *
+ * However, if we don't have this TLS model available on the platform, then we
+ * still want to use normal TLS (which involves a function call, but not the
+ * expensive pthread_getspecific() or its equivalent).
+ */
+#if DETECT_OS_APPLE
+/* Apple Clang emits wrappers when using thread_local that break module linkage,
+ * but not with __thread
+ */
+#define __THREAD_INITIAL_EXEC __thread
+#elif defined(__GLIBC__)
+#define __THREAD_INITIAL_EXEC thread_local __attribute__((tls_model("initial-exec")))
+#define REALLY_INITIAL_EXEC
+#else
+#define __THREAD_INITIAL_EXEC thread_local
+#endif
 
-#define _glthread_DECLARE_STATIC_MUTEX(name)  /*static*/ _glthread_Mutex name = {0,0,0,0,0,0}
-#define _glthread_INIT_MUTEX(name)  InitializeCriticalSection(&name)
-#define _glthread_DESTROY_MUTEX(name)  DeleteCriticalSection(&name)
-#define _glthread_LOCK_MUTEX(name)  EnterCriticalSection(&name)
-#define _glthread_UNLOCK_MUTEX(name)  LeaveCriticalSection(&name)
+static inline int
+util_get_current_cpu(void)
+{
+#if DETECT_OS_LINUX && !defined(ANDROID)
+   return sched_getcpu();
 
-#endif                          /* WIN32_THREADS */
+#elif defined(_WIN32) && !defined(__CYGWIN__) && _WIN32_WINNT >= 0x0600
+   return GetCurrentProcessorNumber();
+
+#else
+   return -1;
+#endif
+}
+
+static inline int u_thread_create(thrd_t *thrd, int (*routine)(void *), void *param)
+{
+   int ret = thrd_error;
+#ifdef HAVE_PTHREAD
+   sigset_t saved_set, new_set;
+
+   sigfillset(&new_set);
+   sigdelset(&new_set, SIGSYS);
+
+   /* SIGSEGV is commonly used by Vulkan API tracing layers in order to track
+    * accesses in device memory mapped to user space. Blocking the signal hinders
+    * that tracking mechanism.
+    */
+   sigdelset(&new_set, SIGSEGV);
+   pthread_sigmask(SIG_BLOCK, &new_set, &saved_set);
+   ret = thrd_create(thrd, routine, param);
+   pthread_sigmask(SIG_SETMASK, &saved_set, NULL);
+#else
+   ret = thrd_create(thrd, routine, param);
+#endif
+
+   return ret;
+}
+
+static inline void u_thread_setname( const char *name )
+{
+#if defined(HAVE_PTHREAD)
+#if DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS
+   int ret = pthread_setname_np(pthread_self(), name);
+   if (ret == ERANGE) {
+      char buf[16];
+      const size_t len = MIN2(strlen(name), ARRAY_SIZE(buf) - 1);
+      memcpy(buf, name, len);
+      buf[len] = '\0';
+      pthread_setname_np(pthread_self(), buf);
+   }
+#elif DETECT_OS_FREEBSD || DETECT_OS_OPENBSD
+   pthread_set_name_np(pthread_self(), name);
+#elif DETECT_OS_NETBSD
+   pthread_setname_np(pthread_self(), "%s", (void *)name);
+#elif DETECT_OS_APPLE
+   pthread_setname_np(name);
+#elif DETECT_OS_HAIKU
+   rename_thread(find_thread(NULL), name);
+#else
+#warning Not sure how to call pthread_setname_np
+#endif
+#endif
+   (void)name;
+}
+
+/**
+ * Set thread affinity.
+ *
+ * \param thread         Thread
+ * \param mask           Set this affinity mask
+ * \param old_mask       Previous affinity mask returned if not NULL
+ * \param num_mask_bits  Number of bits in both masks
+ * \return  true on success
+ */
+static inline bool
+util_set_thread_affinity(thrd_t thread,
+                         const uint32_t *mask,
+                         uint32_t *old_mask,
+                         unsigned num_mask_bits)
+{
+#if defined(HAVE_PTHREAD_SETAFFINITY)
+   cpu_set_t cpuset;
+
+   if (old_mask) {
+      if (pthread_getaffinity_np(thread, sizeof(cpuset), &cpuset) != 0)
+         return false;
+
+      memset(old_mask, 0, num_mask_bits / 8);
+      for (unsigned i = 0; i < num_mask_bits && i < CPU_SETSIZE; i++) {
+         if (CPU_ISSET(i, &cpuset))
+            old_mask[i / 32] |= 1u << (i % 32);
+      }
+   }
+
+   CPU_ZERO(&cpuset);
+   for (unsigned i = 0; i < num_mask_bits && i < CPU_SETSIZE; i++) {
+      if (mask[i / 32] & (1u << (i % 32)))
+         CPU_SET(i, &cpuset);
+   }
+   return pthread_setaffinity_np(thread, sizeof(cpuset), &cpuset) == 0;
+
+#elif defined(_WIN32) && !defined(__CYGWIN__)
+   DWORD_PTR m = mask[0];
+
+   if (sizeof(m) > 4 && num_mask_bits > 32)
+      m |= (uint64_t)mask[1] << 32;
+
+   m = SetThreadAffinityMask(thread.handle, m);
+   if (!m)
+      return false;
+
+   if (old_mask) {
+      memset(old_mask, 0, num_mask_bits / 8);
+
+      old_mask[0] = m;
+#ifdef _WIN64
+      old_mask[1] = m >> 32;
+#endif
+   }
+
+   return true;
+#else
+   return false;
+#endif
+}
+
+static inline bool
+util_set_current_thread_affinity(const uint32_t *mask,
+                                 uint32_t *old_mask,
+                                 unsigned num_mask_bits)
+{
+   return util_set_thread_affinity(thrd_current(), mask, old_mask,
+                                   num_mask_bits);
+}
 
 /*
- * BeOS threads. R5.x required.
+ * Thread statistics.
  */
-#ifdef BEOS_THREADS
 
-#include <kernel/OS.h>
-#include <support/TLS.h>
+/* Return the time of a thread's CPU time clock. */
+static inline int64_t
+util_thread_get_time_nano(thrd_t thread)
+{
+#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__)
+   struct timespec ts;
+   clockid_t cid;
 
-typedef struct {
-    int32 key;
-    int initMagic;
-} _glthread_TSD;
+   pthread_getcpuclockid(thread, &cid);
+   clock_gettime(cid, &ts);
+   return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+#elif defined(_WIN32)
+   union {
+      FILETIME time;
+      ULONGLONG value;
+   } kernel_time, user_time;
+   GetThreadTimes((HANDLE)thread.handle, NULL, NULL, &kernel_time.time, &user_time.time);
+   return (kernel_time.value + user_time.value) * 100;
+#else
+   (void)thread;
+   return 0;
+#endif
+}
 
-typedef thread_id _glthread_Thread;
+/* Return the time of the current thread's CPU time clock. */
+static inline int64_t
+util_current_thread_get_time_nano(void)
+{
+   return util_thread_get_time_nano(thrd_current());
+}
 
-/* Use Benaphore, aka speeder semaphore */
-typedef struct {
-    int32 lock;
-    sem_id sem;
-} benaphore;
-typedef benaphore _glthread_Mutex;
-
-#define _glthread_DECLARE_STATIC_MUTEX(name)  static _glthread_Mutex name = { 0, 0 }
-#define _glthread_INIT_MUTEX(name)    	name.sem = create_sem(0, #name"_benaphore"), name.lock = 0
-#define _glthread_DESTROY_MUTEX(name) 	delete_sem(name.sem), name.lock = 0
-#define _glthread_LOCK_MUTEX(name)    	if (name.sem == 0) _glthread_INIT_MUTEX(name); \
-									  	if (atomic_add(&(name.lock), 1) >= 1) acquire_sem(name.sem)
-#define _glthread_UNLOCK_MUTEX(name)  	if (atomic_add(&(name.lock), -1) > 1) release_sem(name.sem)
-
-#endif                          /* BEOS_THREADS */
-
-#ifndef THREADS
+static inline bool u_thread_is_self(thrd_t thread)
+{
+   return thrd_equal(thrd_current(), thread);
+}
 
 /*
- * THREADS not defined
+ * util_barrier
  */
 
-typedef int _glthread_TSD;
+#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__)
 
-typedef int _glthread_Thread;
+typedef pthread_barrier_t util_barrier;
 
-typedef int _glthread_Mutex;
+static inline void util_barrier_init(util_barrier *barrier, unsigned count)
+{
+   pthread_barrier_init(barrier, NULL, count);
+}
 
-#define _glthread_DECLARE_STATIC_MUTEX(name)  static _glthread_Mutex name = 0
+static inline void util_barrier_destroy(util_barrier *barrier)
+{
+   pthread_barrier_destroy(barrier);
+}
 
-#define _glthread_INIT_MUTEX(name)  (void) name
+static inline bool util_barrier_wait(util_barrier *barrier)
+{
+   return pthread_barrier_wait(barrier) == PTHREAD_BARRIER_SERIAL_THREAD;
+}
 
-#define _glthread_DESTROY_MUTEX(name)  (void) name
 
-#define _glthread_LOCK_MUTEX(name)  (void) name
+#else /* If the OS doesn't have its own, implement barriers using a mutex and a condvar */
 
-#define _glthread_UNLOCK_MUTEX(name)  (void) name
+typedef struct {
+   unsigned count;
+   unsigned waiters;
+   uint64_t sequence;
+   mtx_t mutex;
+   cnd_t condvar;
+} util_barrier;
 
-#endif                          /* THREADS */
+static inline void util_barrier_init(util_barrier *barrier, unsigned count)
+{
+   barrier->count = count;
+   barrier->waiters = 0;
+   barrier->sequence = 0;
+   (void) mtx_init(&barrier->mutex, mtx_plain);
+   cnd_init(&barrier->condvar);
+}
 
-/*
- * Platform independent thread specific data API.
- */
+static inline void util_barrier_destroy(util_barrier *barrier)
+{
+   assert(barrier->waiters == 0);
+   mtx_destroy(&barrier->mutex);
+   cnd_destroy(&barrier->condvar);
+}
 
-extern unsigned long
- _glthread_GetID(void);
+static inline bool util_barrier_wait(util_barrier *barrier)
+{
+   mtx_lock(&barrier->mutex);
 
-extern void
- _glthread_InitTSD(_glthread_TSD *);
+   assert(barrier->waiters < barrier->count);
+   barrier->waiters++;
 
-extern void *_glthread_GetTSD(_glthread_TSD *);
+   if (barrier->waiters < barrier->count) {
+      uint64_t sequence = barrier->sequence;
 
-extern void
- _glthread_SetTSD(_glthread_TSD *, void *);
+      do {
+         cnd_wait(&barrier->condvar, &barrier->mutex);
+      } while (sequence == barrier->sequence);
+   } else {
+      barrier->waiters = 0;
+      barrier->sequence++;
+      cnd_broadcast(&barrier->condvar);
+   }
 
-#endif                          /* THREADS_H */
+   mtx_unlock(&barrier->mutex);
+
+   return true;
+}
+
+#endif
+
+#endif /* U_THREAD_H_ */
