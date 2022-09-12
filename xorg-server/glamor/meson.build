@@ -4,6 +4,7 @@ srcs_glamor = [
     'glamor_core.c',
     'glamor_dash.c',
     'glamor_font.c',
+    'glamor_glx.c',
     'glamor_composite_glyphs.c',
     'glamor_image.c',
     'glamor_lines.c',

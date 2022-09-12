@@ -3,18 +3,18 @@ project('xserver', 'c',
             'buildtype=debugoptimized',
             'c_std=gnu99',
         ],
-        version: '21.1.99.1',
+        version: '21.1.4',
         meson_version: '>= 0.47.0',
 )
-release_date = '2021-07-05'
+release_date = '2022-07-12'
 
 add_project_arguments('-DHAVE_DIX_CONFIG_H', language: ['c', 'objc'])
 cc = meson.get_compiler('c')
 
-add_project_arguments('-fno-strict-aliasing', language : 'c')
-add_project_arguments('-fvisibility=hidden', language : 'c')
+add_global_arguments('-fno-strict-aliasing', language : 'c')
+add_global_arguments('-fvisibility=hidden', language : 'c')
 
-add_project_link_arguments('-fvisibility=hidden', language : 'c')
+add_global_link_arguments('-fvisibility=hidden', language : 'c')
 
 if cc.get_id() == 'gcc' or cc.get_id() == 'clang'
     test_wflags = [
@@ -58,13 +58,13 @@ foreach wflag: test_wflags
     endif
 endforeach
 
-add_project_arguments(common_wflags, language : ['c', 'objc'])
+add_global_arguments(common_wflags, language : ['c', 'objc'])
 
 libdrm_req = '>= 2.4.89'
 libselinux_req = '>= 2.0.86'
 xext_req = '>= 1.0.99.4'
 wayland_req = '>= 1.5.0'
-wayland_protocols_req = '>= 1.22'
+wayland_protocols_req = '>= 1.18'
 gbm_req = '>= 10.2'
 xf86dgaproto_req = '>= 2.0.99.1'
 
@@ -184,8 +184,7 @@ if with_dtrace
 endif
 
 build_xorg = false
-if (host_machine.system() != 'darwin' and
-    host_machine.system() != 'windows')
+if (host_machine.system() != 'windows')
     if get_option('xorg') == 'auto'
         build_xorg = (host_machine.system() != 'darwin' and
                       host_machine.system() != 'windows')
@@ -194,44 +193,10 @@ if (host_machine.system() != 'darwin' and
     endif
 endif
 xorgsdkdir = join_paths(get_option('prefix'), get_option('includedir'), 'xorg')
-libxcvt_dep = dependency('libxcvt', fallback: ['libxcvt', 'libxcvt_dep'], required: build_xorg)
-
-build_xwayland = false
-if (host_machine.system() != 'darwin' and
-    host_machine.system() != 'windows')
-    if get_option('xwayland') != 'false'
-        xwayland_required = get_option('xwayland') == 'true'
-        build_glamor = glamor_option == 'true' or glamor_option == 'auto'
-
-        xwayland_path = get_option('xwayland-path')
-        if (xwayland_path == '')
-            xwayland_path = join_paths(get_option('prefix'), get_option('bindir'))
-        endif
-
-        xwayland_dep = [
-            dependency('wayland-client', version: wayland_req, required: xwayland_required),
-            dependency('wayland-protocols', version: wayland_protocols_req, required: xwayland_required),
-            dependency('libxcvt', fallback: ['libxcvt', 'libxcvt_dep'], required: xwayland_required),
-        ]
-
-        if build_glamor
-            xwayland_dep += dependency('libdrm', version: libdrm_req, required: xwayland_required)
-            xwayland_dep += dependency('epoxy', required: xwayland_required)
-        endif
-
-        build_xwayland = true
-        # check for all the deps being found, to handle 'auto' mode.
-        foreach d: xwayland_dep
-            if not d.found()
-                build_xwayland = false
-            endif
-        endforeach
-    endif
-endif
+libxcvt_dep = dependency('libxcvt', required: build_xorg)
 
 build_xnest = false
-if (host_machine.system() != 'darwin' and
-    host_machine.system() != 'windows')
+if (host_machine.system() != 'windows')
     if get_option('xnest') != 'false'
         xnest_required = get_option('xnest') == 'true'
 
@@ -326,7 +291,7 @@ endif
 module_dir = join_paths(get_option('libdir'), get_option('module_dir'))
 
 if glamor_option == 'auto'
-    build_glamor = build_xorg or build_xwayland
+    build_glamor = build_xorg
 else
     build_glamor = glamor_option == 'true'
 endif
@@ -336,21 +301,6 @@ epoxy_dep = dependency('', required: false)
 if build_glamor
     gbm_dep = dependency('gbm', version: gbm_req, required: false)
     epoxy_dep = dependency('epoxy', required: false)
-endif
-
-eglstream_option = get_option('xwayland_eglstream')
-if build_xwayland and build_glamor
-    eglstream_dep = dependency('wayland-eglstream-protocols', required:false)
-    if eglstream_option == 'auto'
-        build_eglstream = eglstream_dep.found()
-    else
-        build_eglstream = eglstream_option == 'true'
-        if build_eglstream and not eglstream_dep.found()
-            error('glamor EGLStream support requested, but wayland-eglstream-protocols not found')
-        endif
-    endif
-else
-    build_eglstream = false
 endif
 
 # Lots of sha1 options, because Linux is about choice :)
@@ -859,13 +809,6 @@ if build_xorg
     sdkconfig.set('SDK_REQUIRED_MODULES', ' '.join(sdk_required_modules))
     sdkconfig.set('symbol_visibility', '-fvisibility=hidden')
     sdkconfig.set('XORG_DRIVER_LIBS', '')
-
-    # On Windows, modules built with the SDK will need to link with server and
-    # module implibs to resolve symbols
-    if (host_machine.system() == 'cygwin' or
-        host_machine.system() == 'windows')
-        sdkconfig.set('XORG_DRIVER_LIBS', '-lXorg.exe -L\${moduledir} -lshadow -no-undefined')
-    endif
 
     configure_file(
         input: 'xorg-server.pc.in',

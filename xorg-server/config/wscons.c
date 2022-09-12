@@ -30,7 +30,6 @@
 
 #include <sys/ioctl.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -55,10 +54,7 @@ struct nameint {
     char *name;
 } kbdenc[] = {
     KB_OVRENC,
-    KB_ENCTAB
-#ifndef __NetBSD__
-    ,
-#endif
+    KB_ENCTAB,
     {0}
 };
 
@@ -224,11 +220,7 @@ wscons_add_pointers(void)
     for (i = 0; i < 4; i++) {
         snprintf(devname, sizeof(devname), "%s%d", WSCONS_MOUSE_PREFIX, i);
         LogMessageVerb(X_INFO, 10, "wsmouse: checking %s\n", devname);
-#ifdef HAVE_OPEN_DEVICE
-        fd = open_device(devname, O_RDWR | O_NONBLOCK | O_EXCL);
-#else
-        fd = open(devname, O_RDWR | O_NONBLOCK | O_EXCL);
-#endif
+        fd = open_device(devnamem O_RDWR | O_NONBLOCK | O_EXCL);
         if (fd == -1) {
             LogMessageVerb(X_WARNING, 10, "%s: %s\n", devname, strerror(errno));
             continue;
@@ -241,11 +233,9 @@ wscons_add_pointers(void)
         }
         close(fd);
         switch (wsmouse_type) {
-#ifdef WSMOUSE_TYPE_SYNAPTICS
         case WSMOUSE_TYPE_SYNAPTICS:
             wscons_add_pointer(devname, "synaptics", ATTR_TOUCHPAD);
             break;
-#endif
         case WSMOUSE_TYPE_TPANEL:
             wscons_add_pointer(devname, "ws", ATTR_TOUCHSCREEN);
             break;
@@ -253,8 +243,8 @@ wscons_add_pointers(void)
             break;
         }
     }
-    /* Add a default entry catching all other mux elements as pointers */
-    wscons_add_pointer(WSCONS_MOUSE_PREFIX, "ws", ATTR_POINTER);
+    /* Add a default entry catching all other mux elements as "mouse" */
+    wscons_add_pointer(WSCONS_MOUSE_PREFIX, "mouse", ATTR_POINTER);
 }
 
 int
